@@ -1,0 +1,247 @@
+---
+description: Enforce configuration best practices
+globs: *.cs
+---
+# C# Configuration
+
+Enforce configuration best practices for secure and maintainable applications.
+
+<rule>
+name: python_config
+description: Ensure proper configuration management using environment variables and validation
+
+filters:
+  - type: file_extension
+    pattern: "\\.cs$"
+  - type: content
+    pattern: "(os\\.environ|getenv|config|settings|\.env)"
+
+actions:
+  - type: suggest
+    message: |
+      ## Configuration Best Practices
+
+      ### Use Environment Variables
+      ```python
+      import os
+
+      # Basic environment variable access
+      DATABASE_URL = os.environ["DATABASE_URL"]  # Raises if missing
+      DEBUG = os.getenv("DEBUG", "false").lower() == "true"  # With default
+
+      # Better: Fail fast with clear error
+      def get_required_env(name: str) -> str:
+          value = os.getenv(name)
+          if value is None:
+              raise ValueError(f"Required environment variable {name} is not set")
+          return value
+
+      API_KEY = get_required_env("API_KEY")
+      ```
+
+      ### Use pydantic-settings (Recommended)
+      ```python
+      from pydantic_settings import BaseSettings, SettingsConfigDict
+      from pydantic import Field, SecretStr
+
+      class Settings(BaseSettings):
+          """Application settings with validation."""
+          
+          model_config = SettingsConfigDict(
+              env_file=".env",
+              env_file_encoding="utf-8",
+              case_sensitive=False,
+          )
+
+          # Required settings (no default)
+          database_url: str
+          api_key: SecretStr  # Masked in logs
+
+          # Optional with defaults
+          debug: bool = False
+          log_level: str = "INFO"
+          max_connections: int = Field(default=10, ge=1, le=100)
+
+          # Nested settings with prefix
+          redis_host: str = "localhost"
+          redis_port: int = 6379
+
+      # Usage
+      settings = Settings()
+      print(settings.database_url)
+      print(settings.api_key.get_secret_value())  # Explicit access for secrets
+      ```
+
+      ### Environment File (.env)
+      ```bash
+      # .env (DO NOT commit to version control)
+      DATABASE_URL=postgresql://user:pass@localhost/db
+      API_KEY=sk-secret-key-here
+      DEBUG=true
+      LOG_LEVEL=DEBUG
+
+      # .env.example (commit this as documentation)
+      DATABASE_URL=postgresql://user:pass@localhost/db
+      API_KEY=your-api-key-here
+      DEBUG=false
+      LOG_LEVEL=INFO
+      ```
+
+      ### python-dotenv for Simple Cases
+      ```python
+      from dotenv import load_dotenv
+      import os
+
+      # Load .env file (call early in application startup)
+      load_dotenv()
+
+      # Now environment variables are available
+      DATABASE_URL = os.environ["DATABASE_URL"]
+      ```
+
+      ### Configuration Hierarchy
+      ```python
+      from pydantic_settings import BaseSettings, SettingsConfigDict
+
+      class Settings(BaseSettings):
+          model_config = SettingsConfigDict(
+              # Priority (highest to lowest):
+              # 1. Environment variables
+              # 2. .env file
+              # 3. Default values in class
+              env_file=".env",
+          )
+
+          database_url: str
+          debug: bool = False
+      ```
+
+      ### Avoid Hardcoded Configuration
+      ```python
+      # Bad: Hardcoded values
+      API_URL = "https://api.production.example.com"  # ❌
+      TIMEOUT = 30  # ❌
+
+      # Good: Configurable values
+      API_URL = os.getenv("API_URL", "https://api.example.com")  # ✓
+      TIMEOUT = int(os.getenv("TIMEOUT", "30"))  # ✓
+      ```
+
+      ### Type-Safe Configuration
+      ```python
+      from pydantic_settings import BaseSettings
+      from pydantic import Field, field_validator
+      from typing import Literal
+
+      class Settings(BaseSettings):
+          environment: Literal["development", "staging", "production"]
+          log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+          
+          port: int = Field(default=8000, ge=1, le=65535)
+          workers: int = Field(default=4, ge=1)
+
+          @field_validator("workers")
+          @classmethod
+          def validate_workers(cls, v: int, info) -> int:
+              # In production, ensure minimum workers
+              if info.data.get("environment") == "production" and v < 2:
+                  raise ValueError("Production requires at least 2 workers")
+              return v
+      ```
+
+      ### Secrets Management
+      ```python
+      from pydantic import SecretStr
+      from pydantic_settings import BaseSettings
+
+      class Settings(BaseSettings):
+          # SecretStr prevents accidental logging
+          database_password: SecretStr
+          api_secret: SecretStr
+
+      settings = Settings()
+
+      # Safe: Shows SecretStr('**********')
+      print(settings.database_password)
+
+      # Explicit access when needed
+      password = settings.database_password.get_secret_value()
+      ```
+
+      ### Configuration per Environment
+      ```python
+      import os
+      from pydantic_settings import BaseSettings
+
+      class BaseConfig(BaseSettings):
+          debug: bool = False
+          log_level: str = "INFO"
+
+      class DevelopmentConfig(BaseConfig):
+          debug: bool = True
+          log_level: str = "DEBUG"
+
+      class ProductionConfig(BaseConfig):
+          debug: bool = False
+          log_level: str = "WARNING"
+
+      def get_settings() -> BaseConfig:
+          env = os.getenv("ENVIRONMENT", "development")
+          configs = {
+              "development": DevelopmentConfig,
+              "production": ProductionConfig,
+          }
+          return configs.get(env, DevelopmentConfig)()
+      ```
+
+      ### .gitignore for Config Files
+      ```gitignore
+      # Environment files with secrets
+      .env
+      .env.local
+      .env.*.local
+
+      # Keep example file
+      !.env.example
+      ```
+
+      ### Best Practices Summary
+      1. **Never hardcode** secrets or environment-specific values
+      2. **Use pydantic-settings** for validation and type safety
+      3. **Document configuration** with `.env.example`
+      4. **Never commit** `.env` files with secrets
+      5. **Use SecretStr** for sensitive values
+      6. **Validate early** - fail fast on startup if config is invalid
+      7. **Provide sensible defaults** for non-critical settings
+
+examples:
+  - input: |
+      # Bad: Hardcoded configuration
+      DATABASE_URL = "postgresql://admin:password123@localhost/mydb"
+      API_KEY = "sk-1234567890"
+      DEBUG = True
+
+      def connect_db():
+          return create_engine(DATABASE_URL)
+    output: |
+      # Good: Environment-based configuration
+      from pydantic_settings import BaseSettings
+      from pydantic import SecretStr
+
+      class Settings(BaseSettings):
+          database_url: str
+          api_key: SecretStr
+          debug: bool = False
+
+          class Config:
+              env_file = ".env"
+
+      settings = Settings()
+
+      def connect_db():
+          return create_engine(settings.database_url)
+
+metadata:
+  priority: medium
+  version: 1.0
+</rule>
